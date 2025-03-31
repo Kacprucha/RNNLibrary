@@ -1,7 +1,7 @@
-using  Random
-include("ADLibrary/dataTyp.jl")
-include("ADLibrary/overloadMethods.jl")
-include("ADLibrary/gradient.jl")
+include("ADLibrary/BackwordsDiffLibrary.jl")
+
+using Random
+using .BackwordsDiffLibrary
 
 function parameters_initialisation(layer_conf::Vector{Dict{String, Any}})
     layers = []

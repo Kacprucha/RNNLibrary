@@ -5,6 +5,6 @@ include("overloadMethods.jl")
 include("gradient.jl")
 
 export ReverseNode, lift
-export grad
+export back_grad
 
 end

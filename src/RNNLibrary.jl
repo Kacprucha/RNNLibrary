@@ -1,8 +1,12 @@
 module RNNLibrary
 
-include("activationFunctions.jl")
+include("layersInfo.jl")
+include("optymizersInfo.jl")
+include("frowordPass.jl")
+include("backwardPass.jl")
 include("networkFunctions.jl")
 
-export rnn_print, rnn
+export Dense, Embedding, SimpleRNN, SelectLastTimestep, Flatten, Sequential
+export train!
 
 end

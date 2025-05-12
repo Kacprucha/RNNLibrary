@@ -1,193 +1,168 @@
-include("ADLibrary/BackwordsDiffLibrary.jl")
+include("ADLibrary/dataTyp.jl")
+include("ADLibrary/overloadMethods.jl")
+include("ADLibrary/gradient.jl")
+include("ADLibrary/functions.jl")
+
+include("layersInfo.jl")
+include("optymizersInfo.jl")
+include("frowordPass.jl")
+include("backwardPass.jl")
 
 using Random
-using .BackwordsDiffLibrary
+using Statistics
+using LinearAlgebra
 
-function parameters_initialisation(layer_conf::Vector{Dict{String, Any}})
-    layers = []
-    for i in 2:length(layer_conf)
-        Random.seed!(0)
-        k = 1/sqrt(layer_conf[i]["hidden"])
-        input_weights = rand(layer_conf[i-1]["units"], layer_conf[i]["hidden"]) * 2 * k .- k
-
-        hiden_weights = rand(layer_conf[i]["hidden"], layer_conf[i]["hidden"]) * 2 * k .- k
-        hidden_bias = rand(1, layer_conf[i]["hidden"]) * 2 * k .- k
-
-        output_weights = rand(layer_conf[i]["hidden"], layer_conf[i]["units"]) * 2 * k .- k
-        output_bias = rand(1, layer_conf[i]["units"]) * 2 * k .- k
-
-        push!(layers, [input_weights, hiden_weights, hidden_bias, output_weights, output_bias])
+function forward(model::Sequential, x_initial) 
+    current_x = x_initial
+    layer_inputs = Any[x_initial] 
+    layer_caches = []
+    
+    for layer_idx in 1:length(model.layers)
+        layer = model.layers[layer_idx]
+        output_l, cache_l = layer(current_x)
+        
+        push!(layer_caches, cache_l)
+        current_x = output_l
+        push!(layer_inputs, current_x) # Store output of layer i, which is input to layer i+1
     end
 
-    return layers
-    
+    return layer_inputs[end], layer_inputs[1:end-1], layer_caches
 end
 
-function forward(x, layers, activation_function)
-    hiddens = []
-    outputs = []
+function backward(loss_grad_y_pred, model::Sequential, all_inputs_to_layers, all_layer_caches)
+    model_param_grads = []
+    dJ_dx_downstream = loss_grad_y_pred # Gradient w.r.t. output of the last layer
 
-    for i in 1:length(layers)
-        input_weights, hiden_weights, hidden_bias, output_weights, output_bias = layers[i]
+    for i in length(model.layers):-1:1
+        layer = model.layers[i]
+        x_input_to_current_layer = all_inputs_to_layers[i]
+        cache_current_layer = all_layer_caches[i]
+        
+        param_grads_layer_tuple, dJ_dx_upstream = layer_backward(layer, dJ_dx_downstream, x_input_to_current_layer, cache_current_layer)
 
-        hidden = zeros(size(x,1), size(input_weights, 2))
-        output = zeros(size(x,1), size(output_weights, 2))
-
-        for j in 1:size(x, 1)
-            input_x = x[j:j,:] * input_weights
-
-            prev_idx = j == 1 ? 1 : j - 1
-            hidden_x = input_x .+ hidden[prev_idx:prev_idx,:] * hiden_weights .+ hidden_bias
-            hidden_x = activation_function(hidden_x)
-
-            hidden[j,:] = hidden_x[1,:]
-
-            output_x = hidden_x * output_weights + output_bias
-
-            output[j,:] = output_x[1,:]
-        end
-
-        push!(hiddens, hidden)
-        push!(outputs, output)
-    end    
-
-    return hiddens, outputs[end]
-end
-
-function backward(layers, x, lr, grad, hiddens, d_activation_function)
-    for i in 1:length(layers)
-        i_weight, h_weight, h_bias, o_weight, o_bias = layers[i]
-
-        hidden = hiddens[i]
-        next_h_grad = nothing 
-
-        i_weight_grad = zeros(size(i_weight))
-        h_weight_grad = zeros(size(h_weight))
-        h_bias_grad   = zeros(size(h_bias))
-        o_weight_grad = zeros(size(o_weight))
-        o_bias_grad   = zeros(size(o_bias))
-
-        num_samples = size(x, 1)
-        for j in reverse(1:num_samples)
-            out_grad = grad[j:j, :]
-
-            hidden_col = reshape(hidden[j, :], (size(hidden, 2), 1))
-            o_weight_grad .+= hidden_col * out_grad
-            o_bias_grad .+= out_grad
-
-            h_grad = out_grad * o_weight'
-
-            if j < num_samples
-                h_grad .+= next_h_grad * h_weight'
+        if !isempty(param_grads_layer_tuple)
+            # Convert tuple to vector and prepend
+            for grad_p in reverse(param_grads_layer_tuple) # Ensure correct order if tuple was (W,b)
+                prepend!(model_param_grads, [grad_p])
             end
-
-            h_grad .= h_grad .* d_activation_function(hidden[j:j, :])
-
-            next_h_grad = copy(h_grad)
-
-            if j > 1
-                prev_hidden = reshape(hidden[j-1, :], (size(hidden, 2), 1))
-                h_weight_grad .+= prev_hidden * h_grad
-                h_bias_grad .+= h_grad
-            end
-
-            x_row = reshape(x[j, :], (size(x, 2), 1))
-            i_weight_grad .+= x_row * h_grad
         end
-
-        lr_scaled = lr / num_samples
-        i_weight .-= i_weight_grad * lr_scaled
-        h_weight .-= h_weight_grad * lr_scaled
-        h_bias   .-= h_bias_grad   * lr_scaled
-        o_weight .-= o_weight_grad * lr_scaled
-        o_bias   .-= o_bias_grad   * lr_scaled
-
-        layers[i] = [i_weight, h_weight, h_bias, o_weight, o_bias]
+        
+        dJ_dx_downstream = dJ_dx_upstream 
+        
+        if isnothing(dJ_dx_downstream) && i > 1
+            num_remaining_params = 0
+            for j in 1:i-1
+                num_remaining_params += length(get_params(model.layers[j]))
+            end
+            prepend!(model_param_grads, [nothing for _ in 1:num_remaining_params]) # Placeholder
+            break 
+        end
     end
-    
-    return layers
+
+    return model_param_grads
 end
 
-function rnn_print(train_x, train_y, valid_x, valid_y, layer_conf, epochs, lr, sequence_length, activation_function, loss_function)
-    if activation_function == "tanh"
-        activation_fun = tanh_activation
-        d_activation_fun = d_tanh_activation
-    elseif activation_function == "softmax"
-        activation_fun = softmax
-        d_activation_fun = dsoftmax
+function train!(model::Sequential, loss_fun, X_train, y_train, X_test, y_test;
+    epochs=5, lr=0.001, batchsize=64, optimizer=:SGD)
+
+    ps = get_params(model)
+    opt = nothing
+    if optimizer == :SGD
+        opt = SGD(lr)
+    elseif optimizer == :Adam
+        opt = Adam(convert(Float32, lr), ps)
+    else
+        error("Unsupported optimizer type. Choose :SGD or :Adam.")
     end
-    
-    layers = parameters_initialisation(layer_conf)
+
+    clip_norm = 1.0f0
+    decay_factor = 0.5f0
+    decay_epochs = 4 
+
+    n_samples = size(X_train, 2)  
 
     for epoch in 1:epochs
-        sequence_len = sequence_length
-        epoch_loss = 0.0
 
-        for j in 1:(size(train_x, 1) - sequence_len)
-            seq_x = train_x[j:(j+sequence_len-1), :]
-            seq_y = train_y[j:(j+sequence_len-1), :]
-
-            hiddens, outputs = forward(seq_x, layers, activation_fun)
-
-            #grad = BackwordsDiffLibrary.grad(loss_function, [seq_y, outputs])[2]
-            grad = back_grad(loss_function, [seq_y, outputs])[2]
-
-            layers = backward(layers, seq_x, lr, grad, hiddens, d_activation_fun)
-
-            seq_y_r = lift(seq_y)
-            outputs_r = lift(outputs)
-            epoch_loss += loss_function(seq_y_r, outputs_r).value
+        if epoch > 1 && (epoch -1) % decay_epochs == 0
+            opt.lr[1] *= decay_factor
         end
 
-        # Every 10 epochs, compute validation loss.
-        if epoch % 10 == 0
-            valid_loss = 0.0
-            for j in 1:(size(valid_x, 1) - sequence_len)
-                seq_x = valid_x[j:(j+sequence_len-1), :]
-                seq_y = valid_y[j:(j+sequence_len-1), :]
+        total_loss = 0.0
+        total_acc = 0.0
+        num_batches = 0
 
-                _, outputs = forward(seq_x, layers, activation_fun)
+        t = @elapsed begin
+            for i in 1:batchsize:n_samples
+                last = min(i + batchsize - 1, n_samples)
+                x_batch = X_train[:, i:last]
+                y_batch = y_train[:, i:last]
 
-                seq_y_r = lift(seq_y)
-                outputs_r = lift(outputs)
-                valid_loss += loss_function(seq_y_r, outputs_r).value
+                # FORWARD PASS
+                y_pred, all_inputs_to_layers, all_layer_caches = forward(model, x_batch)
+            
+                batch_loss = loss_fun(y_pred, y_batch)
+                batch_acc = batch_accuracy(y_pred, y_batch)
+
+                # Compute Loss Gradient 
+                @diffunction loss_wrapper(a, y) = loss_fun(a, y)
+                delta = grad(loss_wrapper, [y_pred, y_batch])[1]
+            
+                # BACKWARD PASS
+                grads = backward(delta, model, all_inputs_to_layers, all_layer_caches)
+
+                # Calculate total norm of gradients
+                valid_grads = filter(g -> !isnothing(g), grads)
+                if !isempty(valid_grads)
+                    total_norm_sq = sum(sum(g.^2f0) for g in valid_grads)
+                    total_norm = sqrt(total_norm_sq)
+
+                    if total_norm > clip_norm
+                        for i in eachindex(grads)
+                            if !isnothing(grads[i])
+                                grads[i] .*= (clip_norm / total_norm)
+                            end
+                        end
+                    end
+                end
+
+                update!(opt, ps, grads)
+
+                # accumulate
+                total_loss += batch_loss
+                total_acc  += batch_acc
+                num_batches += 1
             end
 
-            println("Epoch: $epoch train loss $(epoch_loss / size(train_x, 1)) valid loss $(valid_loss / size(valid_x, 1))")
+            # average over all batches
+            avg_train_loss = total_loss / num_batches
+            avg_train_acc  = total_acc  / num_batches
+
+            y_test_pred, _, _ = forward(model, Matrix(X_test)) 
+            test_loss = loss_fun(y_test_pred, y_test)
+            test_acc  = batch_accuracy(y_test_pred, y_test)
         end
+
+        println(
+            "Epoch $epoch ▶ ",
+            "Train Loss=$(round(avg_train_loss, digits=4)), ",
+            "Train Acc=$(round(100*avg_train_acc, digits=2))%\t│   ",
+            "Test Loss=$(round(test_loss, digits=4)), ",
+            "Test Acc=$(round(100*test_acc, digits=2))%\t|   ",
+            "Time=$(round(t, digits=2))"
+        )
     end
 end
 
-function rnn(train_x, train_y, layer_conf, epochs, lr, sequence_length, activation_function, loss_function)
-    if activation_function == "tanh"
-        activation_fun = tanh_activation
-        d_activation_fun = d_tanh_activation
-    elseif activation_function == "softmax"
-        activation_fun = softmax
-        d_activation_fun = dsoftmax
+# --- Helpers ---
+function batch_accuracy(y_pred::Array, y_true::Array)
+    if size(y_pred,1)==1
+      # binary: predict “1” if p≥0.5, else “0”
+      preds = vec(y_pred .>= 0.5f0)
+      trues = vec(y_true .== 1f0)
+    else
+      # multi‑class: usual argmax
+      preds = vec(argmax(y_pred, dims=1))
+      trues = vec(argmax(y_true, dims=1))
     end
-    
-    layers = parameters_initialisation(layer_conf)
-
-    for epoch in 1:epochs
-        sequence_len = sequence_length
-        epoch_loss = 0.0
-
-        for j in 1:(size(train_x, 1) - sequence_len)
-            seq_x = train_x[j:(j+sequence_len-1), :]
-            seq_y = train_y[j:(j+sequence_len-1), :]
-
-            hiddens, outputs = forward(seq_x, layers, activation_fun)
-
-            grad = BackwordsDiffLibrary.grad(loss_function, [seq_y, outputs])[2]
-
-            layers = backward(layers, seq_x, lr, grad, hiddens, d_activation_fun)
-
-            seq_y_r = lift(seq_y)
-            outputs_r = lift(outputs)
-            epoch_loss += loss_function(seq_y_r, outputs_r).value
-        end
-    end
-
-    return layers, epoch_loss / size(train_x, 1)
+    return mean(preds .== trues)
 end

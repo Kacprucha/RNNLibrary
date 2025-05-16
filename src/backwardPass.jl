@@ -51,17 +51,20 @@ function layer_backward(layer::SimpleRNN, dJ_dhs::AbstractArray{Float32, 3}, _, 
     dJ_dWh = zeros(Float32, size(layer.Wh))
     dJ_db = zeros(Float32, size(layer.b))
     dJ_dx_seq = zeros(Float32, size(x_seq)) 
-    
+
+    dh_total_buffer = zeros(Float32, hidden_size, batch_size)
     dh_next_t = zeros(Float32, hidden_size, batch_size) 
 
     @diffunction d_rnn_activation_func(val) = layer.activation.(val)
 
     for t in seq_len:-1:1
-        dht_total = dJ_dhs[:, t, :] .+ dh_next_t
+        dht_total_buffer = similar(dh_next_t)
+        dJ_dhs_slice = @view dJ_dhs[:, t, :]
+        dht_total_buffer .= dJ_dhs_slice .+ dh_next_t
         
         # Gradient through activation
         zt = zs[:, t, :]
-        dJ_dzt = dht_total .* grad(d_rnn_activation_func, [zt])[1]
+        dJ_dzt = dht_total_buffer .* grad(d_rnn_activation_func, [zt])[1]
 
         # Gradients for parameters
         xt = @view x_seq[:, t, :]

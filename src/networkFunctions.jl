@@ -63,7 +63,7 @@ function backward(loss_grad_y_pred, model::Sequential, all_inputs_to_layers, all
 end
 
 function train!(model::Sequential, loss_fun, X_train, y_train, X_test, y_test;
-    epochs=5, lr=0.001, batchsize=64, optimizer=:SGD)
+    epochs=5, lr=0.001, batchsize=64, optimizer=:SGD, clip_norm=1.0f0, decay_factor=0.5f0, decay_epochs=4, print_learning_data=true)
 
     ps = get_params(model)
     opt = nothing
@@ -74,10 +74,6 @@ function train!(model::Sequential, loss_fun, X_train, y_train, X_test, y_test;
     else
         error("Unsupported optimizer type. Choose :SGD or :Adam.")
     end
-
-    clip_norm = 1.0f0
-    decay_factor = 0.5f0
-    decay_epochs = 4 
 
     n_samples = size(X_train, 2)  
 
@@ -142,14 +138,16 @@ function train!(model::Sequential, loss_fun, X_train, y_train, X_test, y_test;
             test_acc  = batch_accuracy(y_test_pred, y_test)
         end
 
-        println(
-            "Epoch $epoch ▶ ",
-            "Train Loss=$(round(avg_train_loss, digits=4)), ",
-            "Train Acc=$(round(100*avg_train_acc, digits=2))%\t│   ",
-            "Test Loss=$(round(test_loss, digits=4)), ",
-            "Test Acc=$(round(100*test_acc, digits=2))%\t|   ",
-            "Time=$(round(t, digits=2))"
-        )
+        if print_learning_data
+            println(
+                "Epoch $epoch ▶ ",
+                "Train Loss=$(round(avg_train_loss, digits=4)), ",
+                "Train Acc=$(round(100*avg_train_acc, digits=2))%\t│   ",
+                "Test Loss=$(round(test_loss, digits=4)), ",
+                "Test Acc=$(round(100*test_acc, digits=2))%\t|   ",
+                "Time=$(round(t, digits=2))"
+            )
+        end
     end
 end
 

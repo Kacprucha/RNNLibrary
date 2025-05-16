@@ -54,6 +54,7 @@ train!(model, loss_fun, X_train, y_train, X_test, y_test; epochs=12, lr=0.001, b
 ## Examples
 
 In folder examples there is an notbook ilustrating full proces of crating your own network and training it on sumple data.
+Aditionaly to example of usadge of library there are two notbooks that implements RNN network in Python and in Julia using Flux. In there are time and memeory measurments. This solutions are for reference how those implementations looks in comperason with other solutions.
 
 ## License
 
